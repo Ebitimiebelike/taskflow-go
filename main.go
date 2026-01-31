@@ -28,7 +28,16 @@ func main() {
 	http.HandleFunc("/tasks/", taskHandler)
 
 	// Serve frontend
-	http.Handle("/", http.FileServer(http.Dir("public")))
+	fs := http.FileServer(http.Dir("Public"))
+
+http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		http.ServeFile(w, r, "Public/index.html")
+		return
+	}
+	fs.ServeHTTP(w, r)
+})
+
 
 	// IMPORTANT: Use Railway/host port
 	port := os.Getenv("PORT")
