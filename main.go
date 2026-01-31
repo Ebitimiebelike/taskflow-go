@@ -19,6 +19,27 @@ var tasks []Task
 var currentID int
 var dataFile = "tasks.json"
 
+func main() {
+	// Load tasks on startup
+	loadTasks()
+
+	// API routes
+	http.HandleFunc("/tasks", tasksHandler)
+	http.HandleFunc("/tasks/", taskHandler)
+
+	// Serve frontend
+	http.Handle("/", http.FileServer(http.Dir("public")))
+
+	// IMPORTANT: Use Railway/host port
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Println("Server running on :" + port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+
 // Load tasks from JSON file
 func loadTasks() {
 	file, err := os.Open(dataFile)
@@ -34,7 +55,7 @@ func loadTasks() {
 		log.Fatal(err)
 	}
 
-	json.Unmarshal(data, &tasks)
+	_ = json.Unmarshal(data, &tasks)
 
 	// Update currentID
 	currentID = 0
@@ -53,8 +74,7 @@ func saveTasks() {
 		return
 	}
 
-	err = ioutil.WriteFile(dataFile, data, 0644)
-	if err != nil {
+	if err := ioutil.WriteFile(dataFile, data, 0644); err != nil {
 		log.Println("Error writing tasks.json:", err)
 	}
 }
@@ -66,18 +86,21 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		json.NewEncoder(w).Encode(tasks)
+
 	case "POST":
 		var t Task
-		err := json.NewDecoder(r.Body).Decode(&t)
-		if err != nil || t.Title == "" {
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil || t.Title == "" {
 			http.Error(w, "Invalid task data", http.StatusBadRequest)
 			return
 		}
+
 		currentID++
 		t.ID = currentID
 		tasks = append(tasks, t)
 		saveTasks()
+
 		json.NewEncoder(w).Encode(t)
+
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -101,7 +124,6 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-
 	if index == -1 {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
@@ -112,27 +134,15 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		tasks[index].Completed = !tasks[index].Completed
 		saveTasks()
 		json.NewEncoder(w).Encode(tasks[index])
+
 	case "DELETE":
 		tasks = append(tasks[:index], tasks[index+1:]...)
 		saveTasks()
 		w.WriteHeader(http.StatusNoContent)
+
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
-func main() {
-	// Load tasks on startup
-	loadTasks()
 
-	// API routes
-	http.HandleFunc("/tasks", tasksHandler)
-	http.HandleFunc("/tasks/", taskHandler)
-
-	// Serve frontend
-	fs := http.FileServer(http.Dir("./public"))
-	http.Handle("/", fs)
-
-	log.Println("Server running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
