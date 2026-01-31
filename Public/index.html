@@ -9,13 +9,31 @@
 <body>
   <div class="app">
     <h1>TaskFlow</h1>
+<p class="subtitle">Focus on what matters.</p>
 
-    <form id="taskForm">
+<div id="progressBar" class="progress-bar">
+  <div class="progress-left">
+    <span class="dot done"></span><span id="doneCount">0</span> done
+    <span class="dot progress"></span><span id="progressCount">0</span> in progress
+  </div>
+
+  <div class="progress-right">
+    <span id="totalCount">0</span> total
+  </div>
+</div>
+
+
+    <form id="taskForm" class="task-form">
       <input
         type="text"
         id="titleInput"
         placeholder="New task..."
         required
+      />
+      <input
+        type="text"
+        id="noteInput"
+        placeholder="Optional note (shows on hover)"
       />
       <button type="submit">Add</button>
     </form>

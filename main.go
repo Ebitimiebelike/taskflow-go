@@ -7,12 +7,26 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Task struct {
 	ID        int    `json:"id"`
 	Title     string `json:"title"`
-	Completed bool   `json:"completed"`
+	Status    string `json:"status"`           // "todo" | "progress" | "done"
+	Note      string `json:"note,omitempty"`   // optional short note
+	Completed bool   `json:"completed,omitempty"` // legacy support (optional)
+}
+
+type CreateTaskRequest struct {
+	Title string `json:"title"`
+	Note  string `json:"note"`
+}
+
+type UpdateTaskRequest struct {
+	Title  *string `json:"title,omitempty"`
+	Status *string `json:"status,omitempty"`
+	Note   *string `json:"note,omitempty"`
 }
 
 var tasks []Task
@@ -20,26 +34,14 @@ var currentID int
 var dataFile = "tasks.json"
 
 func main() {
-	// Load tasks on startup
 	loadTasks()
 
-	// API routes
 	http.HandleFunc("/tasks", tasksHandler)
 	http.HandleFunc("/tasks/", taskHandler)
 
-	// Serve frontend
-	fs := http.FileServer(http.Dir("Public"))
+	// Serve frontend (Railway Linux: keep folder name consistent)
+	http.Handle("/", http.FileServer(http.Dir("Public")))
 
-http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" {
-		http.ServeFile(w, r, "Public/index.html")
-		return
-	}
-	fs.ServeHTTP(w, r)
-})
-
-
-	// IMPORTANT: Use Railway/host port
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -49,7 +51,16 @@ http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-// Load tasks from JSON file
+func normalizeStatus(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	switch s {
+	case "todo", "progress", "done":
+		return s
+	default:
+		return ""
+	}
+}
+
 func loadTasks() {
 	file, err := os.Open(dataFile)
 	if err != nil {
@@ -66,29 +77,41 @@ func loadTasks() {
 
 	_ = json.Unmarshal(data, &tasks)
 
-	// Update currentID
+	// currentID + migration: if Status missing, infer from legacy Completed
 	currentID = 0
-	for _, t := range tasks {
-		if t.ID > currentID {
-			currentID = t.ID
+	changed := false
+	for i := range tasks {
+		if tasks[i].ID > currentID {
+			currentID = tasks[i].ID
 		}
+
+		if normalizeStatus(tasks[i].Status) == "" {
+			if tasks[i].Completed {
+				tasks[i].Status = "done"
+			} else {
+				tasks[i].Status = "todo"
+			}
+			changed = true
+		}
+	}
+
+	if changed {
+		saveTasks()
 	}
 }
 
-// Save tasks to JSON file
 func saveTasks() {
 	data, err := json.MarshalIndent(tasks, "", "  ")
 	if err != nil {
 		log.Println("Error saving tasks:", err)
 		return
 	}
-
 	if err := ioutil.WriteFile(dataFile, data, 0644); err != nil {
 		log.Println("Error writing tasks.json:", err)
 	}
 }
 
-// Handler for /tasks (GET, POST)
+// /tasks (GET, POST)
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -97,17 +120,27 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(tasks)
 
 	case "POST":
-		var t Task
-		if err := json.NewDecoder(r.Body).Decode(&t); err != nil || t.Title == "" {
-			http.Error(w, "Invalid task data", http.StatusBadRequest)
+		var req CreateTaskRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			http.Error(w, "Title is required", http.StatusBadRequest)
 			return
 		}
 
 		currentID++
-		t.ID = currentID
+		t := Task{
+			ID:     currentID,
+			Title:  title,
+			Status: "todo",
+			Note:   strings.TrimSpace(req.Note),
+		}
+
 		tasks = append(tasks, t)
 		saveTasks()
-
 		json.NewEncoder(w).Encode(t)
 
 	default:
@@ -115,11 +148,11 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Handler for /tasks/{id} (PUT, DELETE)
+// /tasks/{id} (PUT, DELETE, GET optional)
 func taskHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	idStr := r.URL.Path[len("/tasks/"):]
+	idStr := strings.TrimPrefix(r.URL.Path, "/tasks/")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "Invalid task ID", http.StatusBadRequest)
@@ -139,8 +172,39 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.Method {
+	case "GET":
+		json.NewEncoder(w).Encode(tasks[index])
+
 	case "PUT":
-		tasks[index].Completed = !tasks[index].Completed
+		var req UpdateTaskRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		if req.Title != nil {
+			title := strings.TrimSpace(*req.Title)
+			if title == "" {
+				http.Error(w, "Title cannot be empty", http.StatusBadRequest)
+				return
+			}
+			tasks[index].Title = title
+		}
+
+		if req.Note != nil {
+			tasks[index].Note = strings.TrimSpace(*req.Note)
+		}
+
+		if req.Status != nil {
+			s := normalizeStatus(*req.Status)
+			if s == "" {
+				http.Error(w, "Invalid status. Use todo|progress|done", http.StatusBadRequest)
+				return
+			}
+			tasks[index].Status = s
+			tasks[index].Completed = (s == "done") // keep legacy consistent
+		}
+
 		saveTasks()
 		json.NewEncoder(w).Encode(tasks[index])
 
@@ -153,5 +217,3 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
-
-
