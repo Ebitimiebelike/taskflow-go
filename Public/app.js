@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:8080/tasks";
+const API_URL = "/tasks";
 
 const list = document.getElementById("taskList");
 const form = document.getElementById("taskForm");
@@ -26,13 +26,13 @@ async function loadTasks() {
   });
 }
 
-form.addEventListener("submit", async e => {
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   await fetch(API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: input.value })
+    body: JSON.stringify({ title: input.value.trim() })
   });
 
   input.value = "";
