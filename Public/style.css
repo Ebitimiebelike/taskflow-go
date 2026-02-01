@@ -7,6 +7,7 @@
   --muted: #64748b;
   --border: #e2e8f0;
   --soft: #f8fafc;
+  --card: #ffffff;
 
   --todo: #94a3b8;
   --progress: #3b82f6;
@@ -21,13 +22,13 @@
   --muted: rgba(229,231,235,0.65);
   --border: rgba(255,255,255,0.12);
   --soft: rgba(255,255,255,0.06);
+  --card: rgba(255,255,255,0.03);
 
   --todo: rgba(148,163,184,0.9);
   --progress: rgba(96,165,250,0.95);
   --done: rgba(74,222,128,0.95);
   --danger: rgba(239,68,68,0.95);
 }
-
 
 /* BASE */
 body {
@@ -114,9 +115,6 @@ h1 {
   flex-wrap: wrap;
 }
 
-/* you already have .pill styles from before — keep them */
-
-
 .pill {
   background: transparent;
   border: 1px solid var(--border);
@@ -130,7 +128,7 @@ h1 {
 
 .pill:hover {
   background: var(--soft);
-  border-color: #cbd5e1;
+  border-color: rgba(203,213,225,0.6);
 }
 
 .pill.active {
@@ -139,9 +137,10 @@ h1 {
   color: white;
 }
 
+/* make focus button look correct in BOTH themes */
 #focusToggle.active {
-  background: #0f172a;
-  border-color: #0f172a;
+  background: var(--text);
+  border-color: var(--text);
   color: #fff;
 }
 
@@ -157,13 +156,18 @@ h1 {
   padding: 12px 12px;
   border-radius: 12px;
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--card);
+  color: var(--text);
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+.task-form input::placeholder {
+  color: var(--muted);
+}
+
 .task-form input:focus {
-  border-color: #94a3b8;
+  border-color: rgba(148,163,184,0.9);
   box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.25);
 }
 
@@ -191,7 +195,7 @@ h1 {
 /* TASK CARD */
 .task {
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--card);
   border-radius: 14px;
   padding: 14px;
   display: flex;
@@ -229,7 +233,7 @@ h1 {
 .task.todo { border-left: 4px solid var(--todo); }
 .task.progress { border-left: 4px solid var(--progress); }
 .task.done { border-left: 4px solid var(--done); opacity: 0.9; }
-.task.done .title { text-decoration: line-through; color: #475569; }
+.task.done .title { text-decoration: line-through; color: var(--muted); }
 
 /* Actions */
 .actions {
@@ -243,7 +247,7 @@ h1 {
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--card);
   color: var(--text);
   cursor: pointer;
   transition: background 0.2s ease, transform 0.15s ease, border-color 0.2s ease;
@@ -251,7 +255,7 @@ h1 {
 
 .btn:hover {
   background: var(--soft);
-  border-color: #cbd5e1;
+  border-color: rgba(203,213,225,0.6);
   transform: translateY(-1px);
 }
 
@@ -376,14 +380,13 @@ h1 {
 
 .theme-toggle:hover {
   transform: translateY(-1px);
-  border-color: #cbd5e1;
+  border-color: rgba(203,213,225,0.6);
 }
 
 .theme-toggle:active {
   transform: translateY(0);
 }
 
-/* Make the top row neat */
 .app > .theme-toggle {
   float: right;
   margin-bottom: 10px;

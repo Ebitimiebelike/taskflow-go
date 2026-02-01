@@ -10,7 +10,6 @@ const doneCountEl = document.getElementById("doneCount");
 const progressCountEl = document.getElementById("progressCount");
 const totalCountEl = document.getElementById("totalCount");
 
-// Optional controls (might not exist in HTML)
 const filterButtons = document.querySelectorAll("[data-filter]");
 const focusToggle = document.getElementById("focusToggle");
 
@@ -19,9 +18,8 @@ let allTasks = [];
 let activeFilter = "all"; // all|todo|progress|done
 let focusMode = false;
 
-// --- User ID (per device, no login) ---
+// --- User ID ---
 const USER_KEY = "taskflow.userId.v1";
-
 function getUserId() {
   let id = localStorage.getItem(USER_KEY);
   if (!id) {
@@ -30,22 +28,19 @@ function getUserId() {
   }
   return id;
 }
-
 const USER_ID = getUserId();
 
 // --- Local cache ---
 const STORAGE_KEY = "taskflow.tasks.v1";
 const UPDATED_KEY = "taskflow.lastUpdated.v1";
 
-// --- Theme (detect + persist) ---
+// --- Theme ---
 const THEME_KEY = "taskflow.theme.v1"; // "light" | "dark"
 const themeToggleBtn = document.getElementById("themeToggle");
 
 function getPreferredTheme() {
   const saved = localStorage.getItem(THEME_KEY);
   if (saved === "light" || saved === "dark") return saved;
-
-  // If no saved theme, use system preference
   const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   return prefersDark ? "dark" : "light";
 }
@@ -53,25 +48,20 @@ function getPreferredTheme() {
 function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem(THEME_KEY, theme);
-
   if (themeToggleBtn) {
     themeToggleBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
   }
 }
 
 function setupTheme() {
-  const theme = getPreferredTheme();
-  applyTheme(theme);
-
+  applyTheme(getPreferredTheme());
   if (themeToggleBtn) {
     themeToggleBtn.addEventListener("click", () => {
       const current = document.documentElement.getAttribute("data-theme") || "light";
-      const next = current === "dark" ? "light" : "dark";
-      applyTheme(next);
+      applyTheme(current === "dark" ? "light" : "dark");
     });
   }
 }
-
 
 function loadLocalTasks() {
   try {
@@ -101,7 +91,7 @@ function getLastUpdated() {
   return Number.isFinite(n) ? n : 0;
 }
 
-// --- API helper (always sends user id) ---
+// --- API helper ---
 function apiFetch(path = "", options = {}) {
   return fetch(`${API_URL}${path}`, {
     ...options,
@@ -151,7 +141,7 @@ function updateProgressSummary() {
   if (totalCountEl) totalCountEl.textContent = total;
 }
 
-// --- Filter Counts (only if buttons exist) ---
+// --- Filter Counts ---
 function updateFilterCounts() {
   if (!filterButtons || filterButtons.length === 0) return;
 
@@ -165,13 +155,12 @@ function updateFilterCounts() {
   filterButtons.forEach(btn => {
     const key = btn.getAttribute("data-filter");
     const baseText = btn.getAttribute("data-label") || btn.textContent.split(" (")[0];
-
     if (!btn.getAttribute("data-label")) btn.setAttribute("data-label", baseText);
     btn.textContent = `${baseText} (${counts[key] ?? 0})`;
   });
 }
 
-// --- Last updated UI (injected under progress bar) ---
+// --- Last updated ---
 function ensureLastUpdatedEl() {
   const app = document.querySelector(".app");
   if (!app) return null;
@@ -206,21 +195,29 @@ function formatTime(ts) {
 function renderLastUpdated() {
   const el = ensureLastUpdatedEl();
   if (!el) return;
-  const ts = getLastUpdated();
-  el.textContent = `Last updated: ${formatTime(ts)}`;
+  el.textContent = `Last updated: ${formatTime(getLastUpdated())}`;
 }
 
-// --- Soft animations ---
+// --- Animations ---
 function animateIn(li, i) {
   li.classList.add("task-anim");
   li.style.animationDelay = `${Math.min(i * 45, 240)}ms`;
 }
 
+function pulseBadgeForTaskId(id) {
+  const row = document.querySelector(`li[data-task-id="${id}"]`);
+  const badge = row?.querySelector(".badge");
+  if (!badge) return;
+  badge.classList.remove("pulse");
+  void badge.offsetWidth;
+  badge.classList.add("pulse");
+}
+
 // --- Render ---
 function render() {
   const tasks = applyFilters(allTasks);
-
   if (!list) return;
+
   list.innerHTML = "";
 
   if (tasks.length === 0) {
@@ -240,6 +237,7 @@ function render() {
   tasks.forEach((task, i) => {
     const li = document.createElement("li");
     li.className = `task ${task.status}`;
+    li.dataset.taskId = String(task.id);
 
     const noteAttr = task.note ? `data-note="${escapeHtml(task.note)}"` : "";
 
@@ -267,6 +265,7 @@ function render() {
         }
 
         await updateTask(task.id, { status: action });
+        pulseBadgeForTaskId(task.id);
       });
     });
 
@@ -288,7 +287,7 @@ async function fetchTasks() {
     note: t.note || ""
   }));
 
-  // If server is empty but local has tasks, do NOT wipe local cache
+  // if server is empty but local has tasks, do not wipe local cache
   if (serverTasks.length === 0 && allTasks.length > 0) return;
 
   allTasks = serverTasks;
@@ -302,41 +301,54 @@ async function fetchTasks() {
 }
 
 async function createTask(title, note) {
-  await apiFetch("", {
+  const res = await apiFetch("", {
     method: "POST",
     body: JSON.stringify({ title, note })
   });
+
+  if (!res.ok) {
+    console.error("Create failed:", res.status, await res.text());
+    return;
+  }
 
   setLastUpdated(Date.now());
   await fetchTasks();
 }
 
 async function updateTask(id, patch) {
-  await apiFetch(`/${id}`, {
+  const res = await apiFetch(`/${id}`, {
     method: "PUT",
     body: JSON.stringify(patch)
   });
 
+  if (!res.ok) {
+    console.error("Update failed:", res.status, await res.text());
+    return;
+  }
+
   setLastUpdated(Date.now());
   await fetchTasks();
-
-  // Pulse badge (optional)
-  const badge = document.querySelector(".badge");
-  if (badge) {
-    badge.classList.remove("pulse");
-    void badge.offsetWidth;
-    badge.classList.add("pulse");
-  }
 }
 
 async function deleteTask(id) {
-  await apiFetch(`/${id}`, { method: "DELETE" });
+  try {
+    const res = await apiFetch(`/${id}`, { method: "DELETE" });
 
-  setLastUpdated(Date.now());
-  await fetchTasks();
+    if (!res.ok) {
+      console.error("Delete failed:", res.status, await res.text());
+      alert(`Delete failed (${res.status}). Open console for details.`);
+      return;
+    }
+
+    setLastUpdated(Date.now());
+    await fetchTasks();
+  } catch (err) {
+    console.error("Delete error:", err);
+    alert("Delete error. Open console.");
+  }
 }
 
-// --- Events (guarded so missing elements won't crash the app) ---
+// --- Events ---
 if (form) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -372,10 +384,10 @@ if (focusToggle) {
   });
 }
 
-// --- Boot (guaranteed) ---
+// --- Boot ---
 function init() {
   setupTheme();
-  
+
   allTasks = loadLocalTasks().map(t => ({
     ...t,
     status: normalizeStatus(t.status),
