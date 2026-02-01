@@ -56,6 +56,12 @@ func main() {
 	// Create a new ServeMux
 	mux := http.NewServeMux()
 	
+	// ✅ Health check endpoint
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	
 	// ✅ Debug endpoint to check files
 	mux.HandleFunc("/debug/files", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -104,8 +110,13 @@ func main() {
 		port = "8080"
 	}
 
-	log.Println("Server running on http://localhost:" + port)
-	log.Fatal(http.ListenAndServe(":"+port, withCORS(mux)))
+	addr := "0.0.0.0:" + port
+	log.Printf("Server starting on %s", addr)
+	log.Printf("Public directory: %s", publicDir)
+	
+	if err := http.ListenAndServe(addr, withCORS(mux)); err != nil {
+		log.Fatal("Server error:", err)
+	}
 }
 
 func withCORS(next http.Handler) http.Handler {
