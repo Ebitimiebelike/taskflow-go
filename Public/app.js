@@ -1,4 +1,7 @@
-const API_URL = "/api/tasks";
+console.log("TaskFlow app.js loaded ✅");
+
+// ✅ Always use same origin as the page (prevents “wrong host” issues)
+const API_URL = `${window.location.origin}/api/tasks`;
 
 // DOM
 const list = document.getElementById("taskList");
@@ -10,12 +13,8 @@ const doneCountEl = document.getElementById("doneCount");
 const progressCountEl = document.getElementById("progressCount");
 const totalCountEl = document.getElementById("totalCount");
 
-// Debug (so you can confirm app.js actually loads)
-console.log("TaskFlow app.js loaded ✅");
-
-// -------------------- User ID --------------------
+// Per-device User ID
 const USER_KEY = "taskflow.userId.v1";
-
 function getUserId() {
   let id = localStorage.getItem(USER_KEY);
   if (!id) {
@@ -24,12 +23,10 @@ function getUserId() {
   }
   return id;
 }
-
 const USER_ID = getUserId();
 
-// -------------------- Local cache (instant on refresh) --------------------
+// Local cache (instant refresh)
 const STORAGE_KEY = "taskflow.tasks.v1";
-
 function loadLocalTasks() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -38,14 +35,12 @@ function loadLocalTasks() {
     return [];
   }
 }
-
 function saveLocalTasks(tasks) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
   } catch {}
 }
 
-// -------------------- API helper (ALWAYS sends X-User-Id) --------------------
 async function apiFetch(path = "", options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -56,16 +51,13 @@ async function apiFetch(path = "", options = {}) {
     }
   });
 
-  // If request fails, show clear message in console
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${options.method || "GET"} ${API_URL}${path} failed (${res.status}) ${text}`);
   }
-
   return res;
 }
 
-// -------------------- Helpers --------------------
 function escapeHtml(str) {
   return String(str)
     .replaceAll("&", "&amp;")
@@ -86,10 +78,8 @@ function statusLabel(status) {
   return "Done";
 }
 
-// -------------------- State --------------------
 let allTasks = [];
 
-// -------------------- UI --------------------
 function updateProgressSummary() {
   const done = allTasks.filter(t => t.status === "done").length;
   const progress = allTasks.filter(t => t.status === "progress").length;
@@ -114,7 +104,7 @@ function render() {
     return;
   }
 
-  allTasks.forEach((task) => {
+  allTasks.forEach(task => {
     const li = document.createElement("li");
     li.className = `task ${task.status}`;
 
@@ -137,13 +127,16 @@ function render() {
     li.querySelectorAll("button").forEach(btn => {
       btn.addEventListener("click", async () => {
         const action = btn.getAttribute("data-action");
-
         try {
           if (action === "delete") {
-            await deleteTask(task.id);
+            await apiFetch(`/${task.id}`, { method: "DELETE" });
           } else {
-            await updateTask(task.id, { status: action });
+            await apiFetch(`/${task.id}`, {
+              method: "PUT",
+              body: JSON.stringify({ status: action })
+            });
           }
+          await fetchTasks();
         } catch (e) {
           console.error(e);
           alert("Action failed. Open console for details.");
@@ -155,48 +148,22 @@ function render() {
   });
 }
 
-// -------------------- API actions --------------------
 async function fetchTasks() {
   const res = await apiFetch("", { method: "GET" });
   const data = await res.json();
 
   const serverTasks = Array.isArray(data) ? data : [];
-
   allTasks = serverTasks.map(t => ({
     ...t,
     status: normalizeStatus(t.status),
     note: t.note || ""
   }));
 
-  // cache locally so refresh shows instantly
   saveLocalTasks(allTasks);
-
   render();
   updateProgressSummary();
 }
 
-async function createTask(title, note) {
-  await apiFetch("", {
-    method: "POST",
-    body: JSON.stringify({ title, note })
-  });
-  await fetchTasks();
-}
-
-async function updateTask(id, patch) {
-  await apiFetch(`/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(patch)
-  });
-  await fetchTasks();
-}
-
-async function deleteTask(id) {
-  await apiFetch(`/${id}`, { method: "DELETE" });
-  await fetchTasks();
-}
-
-// -------------------- Events --------------------
 if (form) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -205,9 +172,13 @@ if (form) {
     if (!title) return;
 
     try {
-      await createTask(title, note);
+      await apiFetch("", {
+        method: "POST",
+        body: JSON.stringify({ title, note })
+      });
       if (titleInput) titleInput.value = "";
       if (noteInput) noteInput.value = "";
+      await fetchTasks();
     } catch (e) {
       console.error(e);
       alert("Add failed. Open console for details.");
@@ -215,18 +186,15 @@ if (form) {
   });
 }
 
-// -------------------- Boot --------------------
-// 1) Load local tasks immediately (instant after refresh)
+// ✅ Boot: show local instantly, then sync server
 allTasks = loadLocalTasks().map(t => ({
   ...t,
   status: normalizeStatus(t.status),
   note: t.note || ""
 }));
-
 render();
 updateProgressSummary();
 
-// 2) Then sync from server
 fetchTasks().catch(err => {
-  console.warn("API fetch failed, staying on local cache:", err);
+  console.warn("API sync failed, staying on local cache:", err);
 });

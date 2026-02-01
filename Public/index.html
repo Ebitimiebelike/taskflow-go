@@ -4,58 +4,33 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TaskFlow</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <div class="app">
-    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
-  🌙 Dark
-</button>
-
     <h1>TaskFlow</h1>
-<p class="subtitle">Focus on what matters.</p>
+    <p class="subtitle">Focus on what matters.</p>
 
-<div id="progressBar" class="progress-bar">
-  <div class="progress-left">
-    <span class="dot done"></span><span id="doneCount">0</span> done
-    <span class="dot progress"></span><span id="progressCount">0</span> in progress
-  </div>
-
-  <div class="controls">
-  <div class="filters">
-    <button type="button" class="pill active" data-filter="all">All</button>
-    <button type="button" class="pill" data-filter="todo">To do</button>
-    <button type="button" class="pill" data-filter="progress">In progress</button>
-    <button type="button" class="pill" data-filter="done">Done</button>
-  </div>
-
-  <button type="button" class="pill" id="focusToggle">Focus Mode</button>
-</div>
-
-  <div class="progress-right">
-    <span id="totalCount">0</span> total
-  </div>
-</div>
-
+    <div id="progressBar" class="progress-bar">
+      <div class="progress-left">
+        <span class="dot done"></span><span id="doneCount">0</span> done
+        <span class="dot progress"></span><span id="progressCount">0</span> in progress
+      </div>
+      <div class="progress-right">
+        <span id="totalCount">0</span> total
+      </div>
+    </div>
 
     <form id="taskForm" class="task-form">
-      <input
-        type="text"
-        id="titleInput"
-        placeholder="New task..."
-        required
-      />
-      <input
-        type="text"
-        id="noteInput"
-        placeholder="Optional note (shows on hover)"
-      />
+      <input type="text" id="titleInput" placeholder="New task..." required />
+      <input type="text" id="noteInput" placeholder="Optional note (shows on hover)" />
       <button type="submit">Add</button>
     </form>
 
     <ul id="taskList"></ul>
   </div>
 
-  <script src="app.js"></script>
+  <!-- ✅ defer ensures DOM exists before app.js runs -->
+  <script src="./app.js" defer></script>
 </body>
 </html>
