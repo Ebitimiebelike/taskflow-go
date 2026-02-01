@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,25 +13,33 @@ import (
 )
 
 type Task struct {
-	ID        int       `json:"id"`
-	Title     string    `json:"title"`
-	Status    string    `json:"status"` // todo|progress|done
-	Note      string    `json:"note"`
-	UpdatedAt int64     `json:"updatedAt"`
-	CreatedAt int64     `json:"createdAt"`
+	ID        int    `json:"id"`
+	Title     string `json:"title"`
+	Status    string `json:"status"` // todo|progress|done
+	Note      string `json:"note"`
+	CreatedAt int64  `json:"createdAt"`
+	UpdatedAt int64  `json:"updatedAt"`
 }
 
+// ✅ ONLY data gets marshaled (no mutex here)
+type StoreData struct {
+	Users  map[string][]Task `json:"users"`
+	NextID map[string]int    `json:"nextId"`
+}
+
+// ✅ mutex lives OUTSIDE the marshaled struct
 type Store struct {
-	mu       sync.Mutex
-	Users    map[string][]Task `json:"users"`
-	NextID   map[string]int    `json:"nextId"`
-	Modified int64             `json:"modified"`
+	mu   sync.Mutex
+	data StoreData
 }
 
 var dataFile = "tasks.json"
+
 var store = Store{
-	Users:  map[string][]Task{},
-	NextID: map[string]int{},
+	data: StoreData{
+		Users:  map[string][]Task{},
+		NextID: map[string]int{},
+	},
 }
 
 func main() {
@@ -40,31 +47,27 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// API routes
-	mux.HandleFunc("/api/tasks", tasksHandler)   // GET, POST
-	mux.HandleFunc("/api/tasks/", taskHandler)   // PUT, DELETE
+	// ✅ API routes
+	mux.HandleFunc("/api/tasks", tasksHandler)  // GET, POST
+	mux.HandleFunc("/api/tasks/", taskHandler)  // PUT, DELETE
 
-	// Frontend static
-	publicDir := "./public"
-	fs := http.FileServer(http.Dir(publicDir))
+	// ✅ Frontend
+	fs := http.FileServer(http.Dir("./public"))
 	mux.Handle("/", fs)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-
 	log.Println("Server running on :" + port)
 	log.Fatal(http.ListenAndServe(":"+port, withCORS(mux)))
 }
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// If your frontend is hosted separately, you can set a specific origin here instead of "*"
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-User-Id")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -73,7 +76,7 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-func userID(r *http.Request) (string, error) {
+func getUserID(r *http.Request) (string, error) {
 	id := strings.TrimSpace(r.Header.Get("X-User-Id"))
 	if id == "" {
 		return "", errors.New("missing X-User-Id header")
@@ -90,10 +93,12 @@ func normalizeStatus(s string) string {
 	}
 }
 
+// -------------------- Handlers --------------------
+
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	uid, err := userID(r)
+	uid, err := getUserID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -102,7 +107,7 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		store.mu.Lock()
-		tasks := store.Users[uid]
+		tasks := store.data.Users[uid]
 		store.mu.Unlock()
 		json.NewEncoder(w).Encode(tasks)
 
@@ -119,8 +124,9 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().Unix()
 
 		store.mu.Lock()
-		store.NextID[uid]++
-		id := store.NextID[uid]
+		store.data.NextID[uid]++
+		id := store.data.NextID[uid]
+
 		task := Task{
 			ID:        id,
 			Title:     strings.TrimSpace(body.Title),
@@ -129,8 +135,8 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
-		store.Users[uid] = append(store.Users[uid], task)
-		store.Modified = now
+
+		store.data.Users[uid] = append(store.data.Users[uid], task)
 		store.mu.Unlock()
 
 		saveStore()
@@ -144,7 +150,7 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 func taskHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	uid, err := userID(r)
+	uid, err := getUserID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -160,7 +166,7 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	tasks := store.Users[uid]
+	tasks := store.data.Users[uid]
 	idx := -1
 	for i := range tasks {
 		if tasks[i].ID == id {
@@ -177,8 +183,8 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	case "PUT":
 		var patch struct {
 			Status string `json:"status"`
-			Note   string `json:"note"`
 			Title  string `json:"title"`
+			Note   string `json:"note"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
@@ -188,25 +194,24 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(patch.Title) != "" {
 			tasks[idx].Title = strings.TrimSpace(patch.Title)
 		}
-		if patch.Note != "" || patch.Note == "" {
-			// allow clearing note
-			tasks[idx].Note = strings.TrimSpace(patch.Note)
-		}
+
+		// allow note to be cleared too
+		tasks[idx].Note = strings.TrimSpace(patch.Note)
+
 		if patch.Status != "" {
 			tasks[idx].Status = normalizeStatus(patch.Status)
 		}
-		tasks[idx].UpdatedAt = time.Now().Unix()
-		store.Users[uid] = tasks
-		store.Modified = time.Now().Unix()
 
-		saveStore()
+		tasks[idx].UpdatedAt = time.Now().Unix()
+		store.data.Users[uid] = tasks
+
+		// unlock happens via defer
+		saveStoreLocked()
 		json.NewEncoder(w).Encode(tasks[idx])
 
 	case "DELETE":
-		store.Users[uid] = append(tasks[:idx], tasks[idx+1:]...)
-		store.Modified = time.Now().Unix()
-
-		saveStore()
+		store.data.Users[uid] = append(tasks[:idx], tasks[idx+1:]...)
+		saveStoreLocked()
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
@@ -214,46 +219,45 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// -------------------- Persistence --------------------
+
 func loadStore() {
-	// If file doesn't exist, start fresh
-	f, err := os.ReadFile(dataFile)
+	b, err := os.ReadFile(dataFile)
 	if err != nil {
 		log.Println("tasks.json not found, starting fresh")
 		return
 	}
 
-	var s Store
-	if err := json.Unmarshal(f, &s); err != nil {
-		log.Println("failed to parse tasks.json, starting fresh:", err)
+	var d StoreData
+	if err := json.Unmarshal(b, &d); err != nil {
+		log.Println("failed to parse tasks.json:", err)
 		return
 	}
-
-	// Basic sanity
-	if s.Users == nil {
-		s.Users = map[string][]Task{}
+	if d.Users == nil {
+		d.Users = map[string][]Task{}
 	}
-	if s.NextID == nil {
-		s.NextID = map[string]int{}
+	if d.NextID == nil {
+		d.NextID = map[string]int{}
 	}
 
 	store.mu.Lock()
-	store = s
+	store.data = d
 	store.mu.Unlock()
 }
 
 func saveStore() {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	saveStoreLocked()
+}
 
-	b, err := json.MarshalIndent(store, "", "  ")
+// call only when store.mu is already locked
+func saveStoreLocked() {
+	b, err := json.MarshalIndent(store.data, "", "  ")
 	if err != nil {
 		log.Println("save error:", err)
 		return
 	}
-
-	// Ensure dir exists (helps in some environments)
-	_ = os.MkdirAll(filepath.Dir(dataFile), 0755)
-
 	if err := os.WriteFile(dataFile, b, 0644); err != nil {
 		log.Println("write error:", err)
 	}
