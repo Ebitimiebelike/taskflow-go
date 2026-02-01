@@ -15,8 +15,8 @@ func main() {
 	})
 
 	// API endpoints (you can plug your handlers back in)
-	mux.HandleFunc("/api/tasks", tasksHandler)
-	mux.HandleFunc("/api/tasks/", taskHandler)
+	// mux.HandleFunc("/api/tasks", tasksHandler)
+	// mux.HandleFunc("/api/tasks/", taskHandler)
 
 	// Frontend (must be ./public/index.html etc)
 	fs := http.FileServer(http.Dir("./public"))
