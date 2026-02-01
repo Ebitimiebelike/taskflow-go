@@ -46,10 +46,51 @@ func main() {
 	loadStore()
 
 	// ✅ Serve static files from public directory
-	fileServer := http.FileServer(http.Dir("./Public"))
+	// Get working directory for Railway compatibility
+	publicDir := "./public"
+	if _, err := os.Stat(publicDir); os.IsNotExist(err) {
+		publicDir = "public" // try without ./
+	}
+	fileServer := http.FileServer(http.Dir(publicDir))
 	
 	// Create a new ServeMux
 	mux := http.NewServeMux()
+	
+	// ✅ Debug endpoint to check files
+	mux.HandleFunc("/debug/files", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		wd, _ := os.Getwd()
+		w.Write([]byte("Working directory: " + wd + "\n\n"))
+		
+		// List files in current directory
+		entries, _ := os.ReadDir(".")
+		w.Write([]byte("Files in current directory:\n"))
+		for _, e := range entries {
+			w.Write([]byte("  " + e.Name() + "\n"))
+		}
+		
+		// Check if public exists
+		w.Write([]byte("\nChecking for public directories:\n"))
+		if _, err := os.Stat("public"); err == nil {
+			w.Write([]byte("  ./public exists\n"))
+			files, _ := os.ReadDir("public")
+			for _, f := range files {
+				w.Write([]byte("    - " + f.Name() + "\n"))
+			}
+		} else {
+			w.Write([]byte("  ./public NOT FOUND\n"))
+		}
+		
+		if _, err := os.Stat("Public"); err == nil {
+			w.Write([]byte("  ./Public exists\n"))
+			files, _ := os.ReadDir("Public")
+			for _, f := range files {
+				w.Write([]byte("    - " + f.Name() + "\n"))
+			}
+		} else {
+			w.Write([]byte("  ./Public NOT FOUND\n"))
+		}
+	})
 	
 	// ✅ API routes (more specific routes first)
 	mux.HandleFunc("/api/tasks/", taskHandler)   // PUT, DELETE
