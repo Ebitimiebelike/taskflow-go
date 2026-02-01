@@ -1,6 +1,11 @@
+// app.js — TaskFlow (API + per-device user id + local cache + theme toggle)
+// Requires backend routes at: /api/tasks and /api/tasks/:id
+// Requires HTML ids: taskList, taskForm, titleInput, noteInput, doneCount, progressCount, totalCount
+// Optional HTML id: themeToggle (button)
+
 const API_URL = "/api/tasks";
 
-// DOM
+// -------------------- DOM --------------------
 const list = document.getElementById("taskList");
 const form = document.getElementById("taskForm");
 const titleInput = document.getElementById("titleInput");
@@ -10,16 +15,14 @@ const doneCountEl = document.getElementById("doneCount");
 const progressCountEl = document.getElementById("progressCount");
 const totalCountEl = document.getElementById("totalCount");
 
-const filterButtons = document.querySelectorAll("[data-filter]");
-const focusToggle = document.getElementById("focusToggle");
+const themeToggleBtn = document.getElementById("themeToggle"); // optional
 
-// State
+// -------------------- State --------------------
 let allTasks = [];
-let activeFilter = "all"; // all|todo|progress|done
-let focusMode = false;
 
-// --- User ID ---
+// -------------------- Per-device User ID (sent in header) --------------------
 const USER_KEY = "taskflow.userId.v1";
+
 function getUserId() {
   let id = localStorage.getItem(USER_KEY);
   if (!id) {
@@ -28,40 +31,12 @@ function getUserId() {
   }
   return id;
 }
+
 const USER_ID = getUserId();
 
-// --- Local cache ---
+// -------------------- Local cache (instant render after refresh) --------------------
 const STORAGE_KEY = "taskflow.tasks.v1";
 const UPDATED_KEY = "taskflow.lastUpdated.v1";
-
-// --- Theme ---
-const THEME_KEY = "taskflow.theme.v1"; // "light" | "dark"
-const themeToggleBtn = document.getElementById("themeToggle");
-
-function getPreferredTheme() {
-  const saved = localStorage.getItem(THEME_KEY);
-  if (saved === "light" || saved === "dark") return saved;
-  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  return prefersDark ? "dark" : "light";
-}
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-  localStorage.setItem(THEME_KEY, theme);
-  if (themeToggleBtn) {
-    themeToggleBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
-  }
-}
-
-function setupTheme() {
-  applyTheme(getPreferredTheme());
-  if (themeToggleBtn) {
-    themeToggleBtn.addEventListener("click", () => {
-      const current = document.documentElement.getAttribute("data-theme") || "light";
-      applyTheme(current === "dark" ? "light" : "dark");
-    });
-  }
-}
 
 function loadLocalTasks() {
   try {
@@ -91,9 +66,53 @@ function getLastUpdated() {
   return Number.isFinite(n) ? n : 0;
 }
 
-// --- API helper ---
-function apiFetch(path = "", options = {}) {
-  return fetch(`${API_URL}${path}`, {
+// -------------------- Theme (detect + persist) --------------------
+const THEME_KEY = "taskflow.theme.v1"; // "light" | "dark"
+
+function getPreferredTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved === "light" || saved === "dark") return saved;
+
+  const prefersDark =
+    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return prefersDark ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {}
+
+  if (themeToggleBtn) {
+    themeToggleBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
+  }
+}
+
+function setupTheme() {
+  applyTheme(getPreferredTheme());
+
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener("click", () => {
+      const current = document.documentElement.getAttribute("data-theme") || "light";
+      const next = current === "dark" ? "light" : "dark";
+      applyTheme(next);
+    });
+  }
+
+  // If user hasn't set a theme, follow system changes
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved !== "light" && saved !== "dark") {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq && mq.addEventListener) {
+      mq.addEventListener("change", () => applyTheme(getPreferredTheme()));
+    }
+  }
+}
+
+// -------------------- API helper (ALWAYS sends X-User-Id) --------------------
+async function apiFetch(path = "", options = {}) {
+  const res = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -101,9 +120,17 @@ function apiFetch(path = "", options = {}) {
       ...(options.headers || {})
     }
   });
+
+  // helpful error surface
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${options.method || "GET"} ${API_URL}${path} failed (${res.status}) ${text}`);
+  }
+
+  return res;
 }
 
-// --- Utils ---
+// -------------------- Utils --------------------
 function escapeHtml(str) {
   return String(str)
     .replaceAll("&", "&amp;")
@@ -124,43 +151,17 @@ function statusLabel(status) {
   return "Done";
 }
 
-function applyFilters(tasks) {
-  if (focusMode) return tasks.filter(t => t.status === "progress");
-  if (activeFilter === "all") return tasks;
-  return tasks.filter(t => t.status === activeFilter);
-}
-
-// --- Progress Summary ---
-function updateProgressSummary() {
-  const done = allTasks.filter(t => t.status === "done").length;
-  const progress = allTasks.filter(t => t.status === "progress").length;
-  const total = allTasks.length;
-
-  if (doneCountEl) doneCountEl.textContent = done;
-  if (progressCountEl) progressCountEl.textContent = progress;
-  if (totalCountEl) totalCountEl.textContent = total;
-}
-
-// --- Filter Counts ---
-function updateFilterCounts() {
-  if (!filterButtons || filterButtons.length === 0) return;
-
-  const counts = {
-    all: allTasks.length,
-    todo: allTasks.filter(t => t.status === "todo").length,
-    progress: allTasks.filter(t => t.status === "progress").length,
-    done: allTasks.filter(t => t.status === "done").length,
-  };
-
-  filterButtons.forEach(btn => {
-    const key = btn.getAttribute("data-filter");
-    const baseText = btn.getAttribute("data-label") || btn.textContent.split(" (")[0];
-    if (!btn.getAttribute("data-label")) btn.setAttribute("data-label", baseText);
-    btn.textContent = `${baseText} (${counts[key] ?? 0})`;
+function formatTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit"
   });
 }
 
-// --- Last updated ---
+// -------------------- UI: last updated line --------------------
 function ensureLastUpdatedEl() {
   const app = document.querySelector(".app");
   if (!app) return null;
@@ -178,18 +179,7 @@ function ensureLastUpdatedEl() {
   } else {
     app.insertBefore(el, app.children[2] || null);
   }
-
   return el;
-}
-
-function formatTime(ts) {
-  if (!ts) return "—";
-  const d = new Date(ts);
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
 }
 
 function renderLastUpdated() {
@@ -198,46 +188,41 @@ function renderLastUpdated() {
   el.textContent = `Last updated: ${formatTime(getLastUpdated())}`;
 }
 
-// --- Animations ---
+// -------------------- Counts --------------------
+function updateProgressSummary() {
+  const done = allTasks.filter(t => t.status === "done").length;
+  const progress = allTasks.filter(t => t.status === "progress").length;
+  const total = allTasks.length;
+
+  if (doneCountEl) doneCountEl.textContent = done;
+  if (progressCountEl) progressCountEl.textContent = progress;
+  if (totalCountEl) totalCountEl.textContent = total;
+}
+
+// -------------------- Animations --------------------
 function animateIn(li, i) {
   li.classList.add("task-anim");
   li.style.animationDelay = `${Math.min(i * 45, 240)}ms`;
 }
 
-function pulseBadgeForTaskId(id) {
-  const row = document.querySelector(`li[data-task-id="${id}"]`);
-  const badge = row?.querySelector(".badge");
-  if (!badge) return;
-  badge.classList.remove("pulse");
-  void badge.offsetWidth;
-  badge.classList.add("pulse");
-}
-
-// --- Render ---
+// -------------------- Render --------------------
 function render() {
-  const tasks = applyFilters(allTasks);
   if (!list) return;
-
   list.innerHTML = "";
 
-  if (tasks.length === 0) {
-    const message = focusMode
-      ? "No tasks in progress. Start one ▶ to use Focus Mode."
-      : "Add a task above — then click ▶ to start working on it.";
-
+  if (!allTasks || allTasks.length === 0) {
     list.innerHTML = `
       <li class="empty">
-        <strong>No tasks here.</strong>
-        <span>${message}</span>
+        <strong>No tasks yet.</strong>
+        <span>Add a task above to get started.</span>
       </li>
     `;
     return;
   }
 
-  tasks.forEach((task, i) => {
+  allTasks.forEach((task, i) => {
     const li = document.createElement("li");
     li.className = `task ${task.status}`;
-    li.dataset.taskId = String(task.id);
 
     const noteAttr = task.note ? `data-note="${escapeHtml(task.note)}"` : "";
 
@@ -255,17 +240,30 @@ function render() {
       </div>
     `;
 
+    // Button events
     li.querySelectorAll("button").forEach(btn => {
       btn.addEventListener("click", async () => {
         const action = btn.getAttribute("data-action");
 
-        if (action === "delete") {
-          await deleteTask(task.id);
-          return;
-        }
+        try {
+          if (action === "delete") {
+            await deleteTask(task.id);
+            return;
+          }
 
-        await updateTask(task.id, { status: action });
-        pulseBadgeForTaskId(task.id);
+          await updateTask(task.id, { status: action });
+
+          // subtle pulse on this task's badge
+          const badge = li.querySelector(".badge");
+          if (badge) {
+            badge.classList.remove("pulse");
+            void badge.offsetWidth;
+            badge.classList.add("pulse");
+          }
+        } catch (err) {
+          console.error(err);
+          alert("Action failed. Check console for details.");
+        }
       });
     });
 
@@ -274,7 +272,7 @@ function render() {
   });
 }
 
-// --- API actions ---
+// -------------------- API Actions --------------------
 async function fetchTasks() {
   const res = await apiFetch("", { method: "GET" });
   const data = await res.json();
@@ -287,7 +285,7 @@ async function fetchTasks() {
     note: t.note || ""
   }));
 
-  // if server is empty but local has tasks, do not wipe local cache
+  // If server is empty but we have local tasks, don't wipe local
   if (serverTasks.length === 0 && allTasks.length > 0) return;
 
   allTasks = serverTasks;
@@ -296,98 +294,62 @@ async function fetchTasks() {
   setLastUpdated(Date.now());
 
   render();
-  updateFilterCounts();
   updateProgressSummary();
 }
 
 async function createTask(title, note) {
-  const res = await apiFetch("", {
+  await apiFetch("", {
     method: "POST",
     body: JSON.stringify({ title, note })
   });
-
-  if (!res.ok) {
-    console.error("Create failed:", res.status, await res.text());
-    return;
-  }
 
   setLastUpdated(Date.now());
   await fetchTasks();
 }
 
 async function updateTask(id, patch) {
-  const res = await apiFetch(`/${id}`, {
+  await apiFetch(`/${id}`, {
     method: "PUT",
     body: JSON.stringify(patch)
   });
-
-  if (!res.ok) {
-    console.error("Update failed:", res.status, await res.text());
-    return;
-  }
 
   setLastUpdated(Date.now());
   await fetchTasks();
 }
 
 async function deleteTask(id) {
-  try {
-    const res = await apiFetch(`/${id}`, { method: "DELETE" });
+  await apiFetch(`/${id}`, { method: "DELETE" });
 
-    if (!res.ok) {
-      console.error("Delete failed:", res.status, await res.text());
-      alert(`Delete failed (${res.status}). Open console for details.`);
-      return;
-    }
-
-    setLastUpdated(Date.now());
-    await fetchTasks();
-  } catch (err) {
-    console.error("Delete error:", err);
-    alert("Delete error. Open console.");
-  }
+  setLastUpdated(Date.now());
+  await fetchTasks();
 }
 
-// --- Events ---
+// -------------------- Events --------------------
 if (form) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
 
-    const title = titleInput?.value.trim() || "";
+    const title = (titleInput?.value || "").trim();
     const note = (noteInput?.value || "").trim();
+
     if (!title) return;
 
-    await createTask(title, note);
-
-    if (titleInput) titleInput.value = "";
-    if (noteInput) noteInput.value = "";
+    try {
+      await createTask(title, note);
+      if (titleInput) titleInput.value = "";
+      if (noteInput) noteInput.value = "";
+    } catch (err) {
+      console.error(err);
+      alert("Add failed. Check console for details.");
+    }
   });
 }
 
-if (filterButtons && filterButtons.length) {
-  filterButtons.forEach(btn => {
-    btn.addEventListener("click", () => {
-      activeFilter = btn.getAttribute("data-filter");
-      filterButtons.forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      render();
-    });
-  });
-}
-
-if (focusToggle) {
-  focusToggle.addEventListener("click", () => {
-    focusMode = !focusMode;
-    focusToggle.classList.toggle("active", focusMode);
-    focusToggle.textContent = focusMode ? "Focus Mode: ON" : "Focus Mode";
-    render();
-  });
-}
-
-// --- Boot ---
+// -------------------- Boot --------------------
 function init() {
   setupTheme();
 
+  // 1) show cached tasks immediately after refresh
   allTasks = loadLocalTasks().map(t => ({
     ...t,
     status: normalizeStatus(t.status),
@@ -395,11 +357,13 @@ function init() {
   }));
 
   render();
-  updateFilterCounts();
   updateProgressSummary();
   renderLastUpdated();
 
-  fetchTasks().catch(() => {});
+  // 2) then sync from server
+  fetchTasks().catch(err => {
+    console.warn("API sync failed, staying on local cache:", err);
+  });
 }
 
 if (document.readyState === "loading") {
