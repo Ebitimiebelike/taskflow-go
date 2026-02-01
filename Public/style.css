@@ -88,9 +88,9 @@ h1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  margin: 14px 0;
 }
 
 .filters {
@@ -98,6 +98,9 @@ h1 {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* you already have .pill styles from before — keep them */
+
 
 .pill {
   background: transparent;

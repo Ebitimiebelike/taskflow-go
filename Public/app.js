@@ -10,6 +10,7 @@ const doneCountEl = document.getElementById("doneCount");
 const progressCountEl = document.getElementById("progressCount");
 const totalCountEl = document.getElementById("totalCount");
 
+// Optional controls (might not exist in HTML)
 const filterButtons = document.querySelectorAll("[data-filter]");
 const focusToggle = document.getElementById("focusToggle");
 
@@ -114,8 +115,10 @@ function updateProgressSummary() {
   if (totalCountEl) totalCountEl.textContent = total;
 }
 
-// --- Filter Counts ---
+// --- Filter Counts (only if buttons exist) ---
 function updateFilterCounts() {
+  if (!filterButtons || filterButtons.length === 0) return;
+
   const counts = {
     all: allTasks.length,
     todo: allTasks.filter(t => t.status === "todo").length,
@@ -134,7 +137,6 @@ function updateFilterCounts() {
 
 // --- Last updated UI (injected under progress bar) ---
 function ensureLastUpdatedEl() {
-  // Place it near progress bar if possible, otherwise at top of app
   const app = document.querySelector(".app");
   if (!app) return null;
 
@@ -145,9 +147,8 @@ function ensureLastUpdatedEl() {
   el.id = "lastUpdated";
   el.className = "last-updated";
 
-  // try to insert after progress bar
   const progressBar = document.getElementById("progressBar");
-  if (progressBar && progressBar.parentElement) {
+  if (progressBar) {
     progressBar.insertAdjacentElement("afterend", el);
   } else {
     app.insertBefore(el, app.children[2] || null);
@@ -159,7 +160,6 @@ function ensureLastUpdatedEl() {
 function formatTime(ts) {
   if (!ts) return "—";
   const d = new Date(ts);
-  // compact but readable
   return d.toLocaleString(undefined, {
     weekday: "short",
     hour: "2-digit",
@@ -177,12 +177,14 @@ function renderLastUpdated() {
 // --- Soft animations ---
 function animateIn(li, i) {
   li.classList.add("task-anim");
-  li.style.animationDelay = `${Math.min(i * 45, 240)}ms`; // stagger, cap delay
+  li.style.animationDelay = `${Math.min(i * 45, 240)}ms`;
 }
 
 // --- Render ---
 function render() {
   const tasks = applyFilters(allTasks);
+
+  if (!list) return;
   list.innerHTML = "";
 
   if (tasks.length === 0) {
@@ -250,15 +252,11 @@ async function fetchTasks() {
     note: t.note || ""
   }));
 
-  // ✅ If server is empty but local has tasks, do NOT wipe local cache
-  // (This happens if Railway restarts or file resets)
-  if (serverTasks.length === 0 && allTasks.length > 0) {
-    return; // keep what user already has locally
-  }
+  // If server is empty but local has tasks, do NOT wipe local cache
+  if (serverTasks.length === 0 && allTasks.length > 0) return;
 
   allTasks = serverTasks;
 
-  // ✅ sync local cache + timestamp
   saveLocalTasks(allTasks);
   setLastUpdated(Date.now());
 
@@ -267,14 +265,12 @@ async function fetchTasks() {
   updateProgressSummary();
 }
 
-
 async function createTask(title, note) {
   await apiFetch("", {
     method: "POST",
     body: JSON.stringify({ title, note })
   });
 
-  // Mark update immediately (UX feels snappy)
   setLastUpdated(Date.now());
   await fetchTasks();
 }
@@ -286,22 +282,16 @@ async function updateTask(id, patch) {
   });
 
   setLastUpdated(Date.now());
-
-  // Re-fetch tasks, then pulse the updated one
   await fetchTasks();
 
-  // Pulse the badge of the updated task
-  const updatedTaskEl = document.querySelector(`.task button[data-action="${patch.status}"]`)
-    ?.closest(".task")
-    ?.querySelector(".badge");
-
-  if (updatedTaskEl) {
-    updatedTaskEl.classList.remove("pulse"); // reset if exists
-    void updatedTaskEl.offsetWidth;           // force reflow
-    updatedTaskEl.classList.add("pulse");
+  // Pulse badge (optional)
+  const badge = document.querySelector(".badge");
+  if (badge) {
+    badge.classList.remove("pulse");
+    void badge.offsetWidth;
+    badge.classList.add("pulse");
   }
 }
-
 
 async function deleteTask(id) {
   await apiFetch(`/${id}`, { method: "DELETE" });
@@ -310,38 +300,44 @@ async function deleteTask(id) {
   await fetchTasks();
 }
 
-// --- Events ---
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
+// --- Events (guarded so missing elements won't crash the app) ---
+if (form) {
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
 
-  const title = titleInput.value.trim();
-  const note = (noteInput?.value || "").trim();
-  if (!title) return;
+    const title = titleInput?.value.trim() || "";
+    const note = (noteInput?.value || "").trim();
+    if (!title) return;
 
-  await createTask(title, note);
+    await createTask(title, note);
 
-  titleInput.value = "";
-  if (noteInput) noteInput.value = "";
-});
+    if (titleInput) titleInput.value = "";
+    if (noteInput) noteInput.value = "";
+  });
+}
 
-filterButtons.forEach(btn => {
-  btn.addEventListener("click", () => {
-    activeFilter = btn.getAttribute("data-filter");
-    filterButtons.forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
+if (filterButtons && filterButtons.length) {
+  filterButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeFilter = btn.getAttribute("data-filter");
+      filterButtons.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      render();
+    });
+  });
+}
+
+if (focusToggle) {
+  focusToggle.addEventListener("click", () => {
+    focusMode = !focusMode;
+    focusToggle.classList.toggle("active", focusMode);
+    focusToggle.textContent = focusMode ? "Focus Mode: ON" : "Focus Mode";
     render();
   });
-});
+}
 
-focusToggle.addEventListener("click", () => {
-  focusMode = !focusMode;
-  focusToggle.classList.toggle("active", focusMode);
-  focusToggle.textContent = focusMode ? "Focus Mode: ON" : "Focus Mode";
-  render();
-});
-
+// --- Boot (guaranteed) ---
 function init() {
-  // Load cached tasks immediately
   allTasks = loadLocalTasks().map(t => ({
     ...t,
     status: normalizeStatus(t.status),
@@ -353,7 +349,6 @@ function init() {
   updateProgressSummary();
   renderLastUpdated();
 
-  // Sync from server (won’t wipe local cache anymore)
   fetchTasks().catch(() => {});
 }
 
