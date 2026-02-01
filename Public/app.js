@@ -244,13 +244,21 @@ async function fetchTasks() {
 
   if (!Array.isArray(data)) return;
 
-  allTasks = data.map(t => ({
+  const serverTasks = data.map(t => ({
     ...t,
     status: normalizeStatus(t.status),
     note: t.note || ""
   }));
 
-  // sync local cache
+  // ✅ If server is empty but local has tasks, do NOT wipe local cache
+  // (This happens if Railway restarts or file resets)
+  if (serverTasks.length === 0 && allTasks.length > 0) {
+    return; // keep what user already has locally
+  }
+
+  allTasks = serverTasks;
+
+  // ✅ sync local cache + timestamp
   saveLocalTasks(allTasks);
   setLastUpdated(Date.now());
 
@@ -258,6 +266,7 @@ async function fetchTasks() {
   updateFilterCounts();
   updateProgressSummary();
 }
+
 
 async function createTask(title, note) {
   await apiFetch("", {
@@ -344,14 +353,12 @@ function init() {
   updateProgressSummary();
   renderLastUpdated();
 
-  // Sync from server
-  fetchTasks().catch(() => {
-    // keep local tasks if API fails
-  });
+  // Sync from server (won’t wipe local cache anymore)
+  fetchTasks().catch(() => {});
 }
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
 } else {
-  init(); // DOM already loaded, run immediately
+  init();
 }
