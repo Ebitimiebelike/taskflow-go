@@ -331,8 +331,8 @@ focusToggle.addEventListener("click", () => {
   render();
 });
 
-// --- Boot: wait for DOM, show cached tasks immediately, then sync ---
-document.addEventListener("DOMContentLoaded", () => {
+function init() {
+  // Load cached tasks immediately
   allTasks = loadLocalTasks().map(t => ({
     ...t,
     status: normalizeStatus(t.status),
@@ -344,8 +344,14 @@ document.addEventListener("DOMContentLoaded", () => {
   updateProgressSummary();
   renderLastUpdated();
 
+  // Sync from server
   fetchTasks().catch(() => {
     // keep local tasks if API fails
   });
-});
+}
 
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init(); // DOM already loaded, run immediately
+}
