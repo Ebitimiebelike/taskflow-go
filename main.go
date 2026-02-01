@@ -52,7 +52,7 @@ func main() {
 	mux.HandleFunc("/api/tasks/", taskHandler)  // PUT, DELETE
 
 	// ✅ Frontend
-	fs := http.FileServer(http.Dir("./public"))
+	fs := http.FileServer(http.Dir("."))
 	mux.Handle("/", fs)
 
 	port := os.Getenv("PORT")
