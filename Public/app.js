@@ -37,6 +37,42 @@ const USER_ID = getUserId();
 const STORAGE_KEY = "taskflow.tasks.v1";
 const UPDATED_KEY = "taskflow.lastUpdated.v1";
 
+// --- Theme (detect + persist) ---
+const THEME_KEY = "taskflow.theme.v1"; // "light" | "dark"
+const themeToggleBtn = document.getElementById("themeToggle");
+
+function getPreferredTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved === "light" || saved === "dark") return saved;
+
+  // If no saved theme, use system preference
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return prefersDark ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem(THEME_KEY, theme);
+
+  if (themeToggleBtn) {
+    themeToggleBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
+  }
+}
+
+function setupTheme() {
+  const theme = getPreferredTheme();
+  applyTheme(theme);
+
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener("click", () => {
+      const current = document.documentElement.getAttribute("data-theme") || "light";
+      const next = current === "dark" ? "light" : "dark";
+      applyTheme(next);
+    });
+  }
+}
+
+
 function loadLocalTasks() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -338,6 +374,8 @@ if (focusToggle) {
 
 // --- Boot (guaranteed) ---
 function init() {
+  setupTheme();
+  
   allTasks = loadLocalTasks().map(t => ({
     ...t,
     status: normalizeStatus(t.status),
