@@ -1,4 +1,4 @@
-const API_URL = "/tasks";
+const API_URL = "/api/tasks";
 
 // DOM
 const list = document.getElementById("taskList");
