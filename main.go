@@ -11,11 +11,10 @@ import (
 )
 
 type Task struct {
-	ID        int    `json:"id"`
-	Title     string `json:"title"`
-	Status    string `json:"status"`           // "todo" | "progress" | "done"
-	Note      string `json:"note,omitempty"`   // optional short note
-	Completed bool   `json:"completed,omitempty"` // legacy support (optional)
+	ID     int    `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`         // "todo" | "progress" | "done"
+	Note   string `json:"note,omitempty"` // optional
 }
 
 type CreateTaskRequest struct {
@@ -29,17 +28,25 @@ type UpdateTaskRequest struct {
 	Note   *string `json:"note,omitempty"`
 }
 
-var tasks []Task
-var currentID int
+// New storage format: per-user tasks + per-user ID counters
+type Store struct {
+	TasksByUser     map[string][]Task `json:"tasksByUser"`
+	CurrentIDByUser map[string]int    `json:"currentIdByUser"`
+}
+
 var dataFile = "tasks.json"
+var store = Store{
+	TasksByUser:     map[string][]Task{},
+	CurrentIDByUser: map[string]int{},
+}
 
 func main() {
-	loadTasks()
+	loadStore()
 
 	http.HandleFunc("/tasks", tasksHandler)
 	http.HandleFunc("/tasks/", taskHandler)
 
-	// Serve frontend (Railway Linux: keep folder name consistent)
+	// Serve frontend (Railway Linux: your folder is "Public")
 	http.Handle("/", http.FileServer(http.Dir("Public")))
 
 	port := os.Getenv("PORT")
@@ -51,21 +58,34 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
+func getUserID(r *http.Request) string {
+	// Read from header first
+	id := strings.TrimSpace(r.Header.Get("X-User-Id"))
+	if id == "" {
+		// fallback: query param (optional)
+		id = strings.TrimSpace(r.URL.Query().Get("userId"))
+	}
+	if id == "" {
+		// If someone hits your API without id, group them into "guest"
+		id = "guest"
+	}
+	return id
+}
+
 func normalizeStatus(s string) string {
 	s = strings.TrimSpace(strings.ToLower(s))
 	switch s {
 	case "todo", "progress", "done":
 		return s
 	default:
-		return ""
+		return "todo"
 	}
 }
 
-func loadTasks() {
+func loadStore() {
 	file, err := os.Open(dataFile)
 	if err != nil {
 		log.Println("tasks.json not found, starting fresh")
-		tasks = []Task{}
 		return
 	}
 	defer file.Close()
@@ -75,35 +95,43 @@ func loadTasks() {
 		log.Fatal(err)
 	}
 
-	_ = json.Unmarshal(data, &tasks)
-
-	// currentID + migration: if Status missing, infer from legacy Completed
-	currentID = 0
-	changed := false
-	for i := range tasks {
-		if tasks[i].ID > currentID {
-			currentID = tasks[i].ID
+	// Try new format
+	var s Store
+	if err := json.Unmarshal(data, &s); err == nil && s.TasksByUser != nil {
+		store = s
+		if store.TasksByUser == nil {
+			store.TasksByUser = map[string][]Task{}
 		}
+		if store.CurrentIDByUser == nil {
+			store.CurrentIDByUser = map[string]int{}
+		}
+		return
+	}
 
-		if normalizeStatus(tasks[i].Status) == "" {
-			if tasks[i].Completed {
-				tasks[i].Status = "done"
-			} else {
-				tasks[i].Status = "todo"
+	// Backward compatibility: old format []Task
+	var old []Task
+	if err := json.Unmarshal(data, &old); err == nil {
+		store.TasksByUser["guest"] = old
+		maxID := 0
+		for i := range old {
+			old[i].Status = normalizeStatus(old[i].Status)
+			if old[i].ID > maxID {
+				maxID = old[i].ID
 			}
-			changed = true
 		}
+		store.TasksByUser["guest"] = old
+		store.CurrentIDByUser["guest"] = maxID
+		saveStore()
+		return
 	}
 
-	if changed {
-		saveTasks()
-	}
+	log.Println("Could not parse tasks.json; starting fresh")
 }
 
-func saveTasks() {
-	data, err := json.MarshalIndent(tasks, "", "  ")
+func saveStore() {
+	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
-		log.Println("Error saving tasks:", err)
+		log.Println("Error saving store:", err)
 		return
 	}
 	if err := ioutil.WriteFile(dataFile, data, 0644); err != nil {
@@ -111,13 +139,20 @@ func saveTasks() {
 	}
 }
 
-// /tasks (GET, POST)
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	userID := getUserID(r)
+
+	if _, ok := store.TasksByUser[userID]; !ok {
+		store.TasksByUser[userID] = []Task{}
+	}
+	if _, ok := store.CurrentIDByUser[userID]; !ok {
+		store.CurrentIDByUser[userID] = 0
+	}
 
 	switch r.Method {
 	case "GET":
-		json.NewEncoder(w).Encode(tasks)
+		json.NewEncoder(w).Encode(store.TasksByUser[userID])
 
 	case "POST":
 		var req CreateTaskRequest
@@ -131,16 +166,16 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		currentID++
+		store.CurrentIDByUser[userID]++
 		t := Task{
-			ID:     currentID,
+			ID:     store.CurrentIDByUser[userID],
 			Title:  title,
 			Status: "todo",
 			Note:   strings.TrimSpace(req.Note),
 		}
 
-		tasks = append(tasks, t)
-		saveTasks()
+		store.TasksByUser[userID] = append(store.TasksByUser[userID], t)
+		saveStore()
 		json.NewEncoder(w).Encode(t)
 
 	default:
@@ -148,9 +183,9 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// /tasks/{id} (PUT, DELETE, GET optional)
 func taskHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	userID := getUserID(r)
 
 	idStr := strings.TrimPrefix(r.URL.Path, "/tasks/")
 	id, err := strconv.Atoi(idStr)
@@ -159,6 +194,7 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tasks := store.TasksByUser[userID]
 	index := -1
 	for i, t := range tasks {
 		if t.ID == id {
@@ -172,9 +208,6 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.Method {
-	case "GET":
-		json.NewEncoder(w).Encode(tasks[index])
-
 	case "PUT":
 		var req UpdateTaskRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -196,24 +229,21 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.Status != nil {
-			s := normalizeStatus(*req.Status)
-			if s == "" {
-				http.Error(w, "Invalid status. Use todo|progress|done", http.StatusBadRequest)
-				return
-			}
-			tasks[index].Status = s
-			tasks[index].Completed = (s == "done") // keep legacy consistent
+			tasks[index].Status = normalizeStatus(*req.Status)
 		}
 
-		saveTasks()
+		store.TasksByUser[userID] = tasks
+		saveStore()
 		json.NewEncoder(w).Encode(tasks[index])
 
 	case "DELETE":
 		tasks = append(tasks[:index], tasks[index+1:]...)
-		saveTasks()
+		store.TasksByUser[userID] = tasks
+		saveStore()
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
+

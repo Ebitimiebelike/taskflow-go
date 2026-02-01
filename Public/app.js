@@ -15,6 +15,52 @@ let allTasks = [];
 let activeFilter = "all"; // all|todo|progress|done
 let focusMode = false;    // when true -> show only progress
 
+const USER_KEY = "taskflow.userId.v1";
+
+function getUserId() {
+  let id = localStorage.getItem(USER_KEY);
+  if (!id) {
+    // simple unique-ish id (good enough for no-auth demo)
+    id = "u_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
+    localStorage.setItem(USER_KEY, id);
+  }
+  return id;
+}
+
+const USER_ID = getUserId();
+
+function apiFetch(path = "", options = {}) {
+  return fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-User-Id": USER_ID,
+      ...(options.headers || {})
+    }
+  });
+}
+
+
+const STORAGE_KEY = "taskflow.tasks.v1";
+
+function loadLocalTasks() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalTasks(tasks) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  } catch {
+    // If storage is full or blocked, fail silently
+  }
+}
+
+
 function updateProgressSummary() {
   const done = allTasks.filter(t => t.status === "done").length;
   const progress = allTasks.filter(t => t.status === "progress").length;
@@ -27,10 +73,8 @@ function updateProgressSummary() {
 
 
 async function fetchTasks() {
-  const res = await fetch(API_URL);
+  const res = await apiFetch("", { method: "GET" });
   const data = await res.json();
-
-  // ✅ Safety: normalize older tasks with missing status
   allTasks = (Array.isArray(data) ? data : []).map(t => ({
     ...t,
     status: normalizeStatus(t.status),
@@ -41,6 +85,28 @@ async function fetchTasks() {
   updateFilterCounts();
   updateProgressSummary();
 }
+
+async function createTask(title, note) {
+  await apiFetch("", {
+    method: "POST",
+    body: JSON.stringify({ title, note })
+  });
+  await fetchTasks();
+}
+
+async function updateTask(id, patch) {
+  await apiFetch(`/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(patch)
+  });
+  await fetchTasks();
+}
+
+async function deleteTask(id) {
+  await apiFetch(`/${id}`, { method: "DELETE" });
+  await fetchTasks();
+}
+
 
 function normalizeStatus(status) {
   if (status === "todo" || status === "progress" || status === "done") return status;
@@ -197,5 +263,18 @@ function escapeHtml(str) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+// 1) Load cached tasks immediately (works offline + survives refresh)
+allTasks = loadLocalTasks().map(t => ({
+  ...t,
+  status: normalizeStatus(t.status),
+  note: t.note || ""
+}));
+render();
+updateFilterCounts();
+updateProgressSummary();
 
-fetchTasks();
+// 2) Then try to sync from API (if server has data)
+fetchTasks().catch(() => {
+  // If API fails, keep local tasks
+});
+
