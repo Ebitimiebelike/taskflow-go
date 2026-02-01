@@ -46,7 +46,7 @@ func main() {
 	loadStore()
 
 	// ✅ Serve static files from public directory
-	fileServer := http.FileServer(http.Dir("./public"))
+	fileServer := http.FileServer(http.Dir("./Public"))
 	
 	// Create a new ServeMux
 	mux := http.NewServeMux()
