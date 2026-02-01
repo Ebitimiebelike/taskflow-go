@@ -45,29 +45,30 @@ var store = Store{
 func main() {
 	loadStore()
 
+	// ✅ Serve static files from public directory
+	fileServer := http.FileServer(http.Dir("./public"))
+	
+	// Create a new ServeMux
 	mux := http.NewServeMux()
-
-	// ✅ API
-	mux.HandleFunc("/api/tasks", tasksHandler)  // GET, POST
-	mux.HandleFunc("/api/tasks/", taskHandler)  // PUT, DELETE
-
-	// ✅ Frontend
-	fs := http.FileServer(http.Dir("."))
-	mux.Handle("/", fs)
+	
+	// ✅ API routes (more specific routes first)
+	mux.HandleFunc("/api/tasks/", taskHandler)   // PUT, DELETE
+	mux.HandleFunc("/api/tasks", tasksHandler)   // GET, POST
+	
+	// ✅ Static files (catch-all, must be last)
+	mux.Handle("/", fileServer)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	log.Println("Server running on :" + port)
+	log.Println("Server running on http://localhost:" + port)
 	log.Fatal(http.ListenAndServe(":"+port, withCORS(mux)))
 }
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// If frontend is same domain, CORS doesn't matter.
-		// If you later host frontend elsewhere, this keeps it working.
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-User-Id")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
