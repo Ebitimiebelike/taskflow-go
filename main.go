@@ -49,7 +49,10 @@ func main() {
 	// Get working directory for Railway compatibility
 	publicDir := "./public"
 	if _, err := os.Stat(publicDir); os.IsNotExist(err) {
-		publicDir = "public" // try without ./
+		publicDir = "Public" // Railway has capital P
+	}
+	if _, err := os.Stat(publicDir); os.IsNotExist(err) {
+		log.Printf("WARNING: Public directory not found at %s", publicDir)
 	}
 	fileServer := http.FileServer(http.Dir(publicDir))
 	
