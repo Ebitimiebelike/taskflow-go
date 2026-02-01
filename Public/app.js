@@ -1,4 +1,4 @@
-const API_URL = "/tasks";
+const API_URL = "https://taskflow-go-production.up.railway.app//tasks";
 
 // DOM
 const list = document.getElementById("taskList");
