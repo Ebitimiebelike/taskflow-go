@@ -2,52 +2,52 @@ package main
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 type Task struct {
-	ID     int    `json:"id"`
-	Title  string `json:"title"`
-	Status string `json:"status"`         // "todo" | "progress" | "done"
-	Note   string `json:"note,omitempty"` // optional
+	ID        int       `json:"id"`
+	Title     string    `json:"title"`
+	Status    string    `json:"status"` // todo|progress|done
+	Note      string    `json:"note"`
+	UpdatedAt int64     `json:"updatedAt"`
+	CreatedAt int64     `json:"createdAt"`
 }
 
-type CreateTaskRequest struct {
-	Title string `json:"title"`
-	Note  string `json:"note"`
-}
-
-type UpdateTaskRequest struct {
-	Title  *string `json:"title,omitempty"`
-	Status *string `json:"status,omitempty"`
-	Note   *string `json:"note,omitempty"`
-}
-
-// New storage format: per-user tasks + per-user ID counters
 type Store struct {
-	TasksByUser     map[string][]Task `json:"tasksByUser"`
-	CurrentIDByUser map[string]int    `json:"currentIdByUser"`
+	mu       sync.Mutex
+	Users    map[string][]Task `json:"users"`
+	NextID   map[string]int    `json:"nextId"`
+	Modified int64             `json:"modified"`
 }
 
 var dataFile = "tasks.json"
 var store = Store{
-	TasksByUser:     map[string][]Task{},
-	CurrentIDByUser: map[string]int{},
+	Users:  map[string][]Task{},
+	NextID: map[string]int{},
 }
 
 func main() {
 	loadStore()
 
-	http.HandleFunc("/tasks", tasksHandler)
-	http.HandleFunc("/tasks/", taskHandler)
+	mux := http.NewServeMux()
 
-	// Serve frontend (Railway Linux: your folder is "Public")
-	http.Handle("/", http.FileServer(http.Dir("Public")))
+	// API routes
+	mux.HandleFunc("/api/tasks", tasksHandler)   // GET, POST
+	mux.HandleFunc("/api/tasks/", taskHandler)   // PUT, DELETE
+
+	// Frontend static
+	publicDir := "./public"
+	fs := http.FileServer(http.Dir(publicDir))
+	mux.Handle("/", fs)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -55,25 +55,33 @@ func main() {
 	}
 
 	log.Println("Server running on :" + port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Fatal(http.ListenAndServe(":"+port, withCORS(mux)))
 }
 
-func getUserID(r *http.Request) string {
-	// Read from header first
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// If your frontend is hosted separately, you can set a specific origin here instead of "*"
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-User-Id")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func userID(r *http.Request) (string, error) {
 	id := strings.TrimSpace(r.Header.Get("X-User-Id"))
 	if id == "" {
-		// fallback: query param (optional)
-		id = strings.TrimSpace(r.URL.Query().Get("userId"))
+		return "", errors.New("missing X-User-Id header")
 	}
-	if id == "" {
-		// If someone hits your API without id, group them into "guest"
-		id = "guest"
-	}
-	return id
+	return id, nil
 }
 
 func normalizeStatus(s string) string {
-	s = strings.TrimSpace(strings.ToLower(s))
 	switch s {
 	case "todo", "progress", "done":
 		return s
@@ -82,101 +90,51 @@ func normalizeStatus(s string) string {
 	}
 }
 
-func loadStore() {
-	file, err := os.Open(dataFile)
-	if err != nil {
-		log.Println("tasks.json not found, starting fresh")
-		return
-	}
-	defer file.Close()
-
-	data, err := ioutil.ReadAll(file)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Try new format
-	var s Store
-	if err := json.Unmarshal(data, &s); err == nil && s.TasksByUser != nil {
-		store = s
-		if store.TasksByUser == nil {
-			store.TasksByUser = map[string][]Task{}
-		}
-		if store.CurrentIDByUser == nil {
-			store.CurrentIDByUser = map[string]int{}
-		}
-		return
-	}
-
-	// Backward compatibility: old format []Task
-	var old []Task
-	if err := json.Unmarshal(data, &old); err == nil {
-		store.TasksByUser["guest"] = old
-		maxID := 0
-		for i := range old {
-			old[i].Status = normalizeStatus(old[i].Status)
-			if old[i].ID > maxID {
-				maxID = old[i].ID
-			}
-		}
-		store.TasksByUser["guest"] = old
-		store.CurrentIDByUser["guest"] = maxID
-		saveStore()
-		return
-	}
-
-	log.Println("Could not parse tasks.json; starting fresh")
-}
-
-func saveStore() {
-	data, err := json.MarshalIndent(store, "", "  ")
-	if err != nil {
-		log.Println("Error saving store:", err)
-		return
-	}
-	if err := ioutil.WriteFile(dataFile, data, 0644); err != nil {
-		log.Println("Error writing tasks.json:", err)
-	}
-}
-
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	userID := getUserID(r)
 
-	if _, ok := store.TasksByUser[userID]; !ok {
-		store.TasksByUser[userID] = []Task{}
-	}
-	if _, ok := store.CurrentIDByUser[userID]; !ok {
-		store.CurrentIDByUser[userID] = 0
+	uid, err := userID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	switch r.Method {
 	case "GET":
-		json.NewEncoder(w).Encode(store.TasksByUser[userID])
+		store.mu.Lock()
+		tasks := store.Users[uid]
+		store.mu.Unlock()
+		json.NewEncoder(w).Encode(tasks)
 
 	case "POST":
-		var req CreateTaskRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
+		var body struct {
+			Title string `json:"title"`
+			Note  string `json:"note"`
 		}
-		title := strings.TrimSpace(req.Title)
-		if title == "" {
-			http.Error(w, "Title is required", http.StatusBadRequest)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Title) == "" {
+			http.Error(w, "invalid task data", http.StatusBadRequest)
 			return
 		}
 
-		store.CurrentIDByUser[userID]++
-		t := Task{
-			ID:     store.CurrentIDByUser[userID],
-			Title:  title,
-			Status: "todo",
-			Note:   strings.TrimSpace(req.Note),
-		}
+		now := time.Now().Unix()
 
-		store.TasksByUser[userID] = append(store.TasksByUser[userID], t)
+		store.mu.Lock()
+		store.NextID[uid]++
+		id := store.NextID[uid]
+		task := Task{
+			ID:        id,
+			Title:     strings.TrimSpace(body.Title),
+			Note:      strings.TrimSpace(body.Note),
+			Status:    "todo",
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		store.Users[uid] = append(store.Users[uid], task)
+		store.Modified = now
+		store.mu.Unlock()
+
 		saveStore()
-		json.NewEncoder(w).Encode(t)
+		json.NewEncoder(w).Encode(task)
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -185,60 +143,69 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 
 func taskHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	userID := getUserID(r)
 
-	idStr := strings.TrimPrefix(r.URL.Path, "/tasks/")
-	id, err := strconv.Atoi(idStr)
+	uid, err := userID(r)
 	if err != nil {
-		http.Error(w, "Invalid task ID", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	tasks := store.TasksByUser[userID]
-	index := -1
-	for i, t := range tasks {
-		if t.ID == id {
-			index = i
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	tasks := store.Users[uid]
+	idx := -1
+	for i := range tasks {
+		if tasks[i].ID == id {
+			idx = i
 			break
 		}
 	}
-	if index == -1 {
-		http.Error(w, "Task not found", http.StatusNotFound)
+	if idx == -1 {
+		http.Error(w, "task not found", http.StatusNotFound)
 		return
 	}
 
 	switch r.Method {
 	case "PUT":
-		var req UpdateTaskRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		var patch struct {
+			Status string `json:"status"`
+			Note   string `json:"note"`
+			Title  string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
 
-		if req.Title != nil {
-			title := strings.TrimSpace(*req.Title)
-			if title == "" {
-				http.Error(w, "Title cannot be empty", http.StatusBadRequest)
-				return
-			}
-			tasks[index].Title = title
+		if strings.TrimSpace(patch.Title) != "" {
+			tasks[idx].Title = strings.TrimSpace(patch.Title)
 		}
-
-		if req.Note != nil {
-			tasks[index].Note = strings.TrimSpace(*req.Note)
+		if patch.Note != "" || patch.Note == "" {
+			// allow clearing note
+			tasks[idx].Note = strings.TrimSpace(patch.Note)
 		}
-
-		if req.Status != nil {
-			tasks[index].Status = normalizeStatus(*req.Status)
+		if patch.Status != "" {
+			tasks[idx].Status = normalizeStatus(patch.Status)
 		}
+		tasks[idx].UpdatedAt = time.Now().Unix()
+		store.Users[uid] = tasks
+		store.Modified = time.Now().Unix()
 
-		store.TasksByUser[userID] = tasks
 		saveStore()
-		json.NewEncoder(w).Encode(tasks[index])
+		json.NewEncoder(w).Encode(tasks[idx])
 
 	case "DELETE":
-		tasks = append(tasks[:index], tasks[index+1:]...)
-		store.TasksByUser[userID] = tasks
+		store.Users[uid] = append(tasks[:idx], tasks[idx+1:]...)
+		store.Modified = time.Now().Unix()
+
 		saveStore()
 		w.WriteHeader(http.StatusNoContent)
 
@@ -247,3 +214,47 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func loadStore() {
+	// If file doesn't exist, start fresh
+	f, err := os.ReadFile(dataFile)
+	if err != nil {
+		log.Println("tasks.json not found, starting fresh")
+		return
+	}
+
+	var s Store
+	if err := json.Unmarshal(f, &s); err != nil {
+		log.Println("failed to parse tasks.json, starting fresh:", err)
+		return
+	}
+
+	// Basic sanity
+	if s.Users == nil {
+		s.Users = map[string][]Task{}
+	}
+	if s.NextID == nil {
+		s.NextID = map[string]int{}
+	}
+
+	store.mu.Lock()
+	store = s
+	store.mu.Unlock()
+}
+
+func saveStore() {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	b, err := json.MarshalIndent(store, "", "  ")
+	if err != nil {
+		log.Println("save error:", err)
+		return
+	}
+
+	// Ensure dir exists (helps in some environments)
+	_ = os.MkdirAll(filepath.Dir(dataFile), 0755)
+
+	if err := os.WriteFile(dataFile, b, 0644); err != nil {
+		log.Println("write error:", err)
+	}
+}
