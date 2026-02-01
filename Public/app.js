@@ -16,7 +16,7 @@ const focusToggle = document.getElementById("focusToggle");
 // State
 let allTasks = [];
 let activeFilter = "all"; // all|todo|progress|done
-let focusMode = false;    // when true -> show only progress
+let focusMode = false;
 
 // --- User ID (per device, no login) ---
 const USER_KEY = "taskflow.userId.v1";
@@ -32,8 +32,9 @@ function getUserId() {
 
 const USER_ID = getUserId();
 
-// --- Local cache (so refresh/offline still shows tasks) ---
+// --- Local cache ---
 const STORAGE_KEY = "taskflow.tasks.v1";
+const UPDATED_KEY = "taskflow.lastUpdated.v1";
 
 function loadLocalTasks() {
   try {
@@ -47,9 +48,20 @@ function loadLocalTasks() {
 function saveLocalTasks(tasks) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-  } catch {
-    // ignore storage errors
-  }
+  } catch {}
+}
+
+function setLastUpdated(ts = Date.now()) {
+  try {
+    localStorage.setItem(UPDATED_KEY, String(ts));
+  } catch {}
+  renderLastUpdated();
+}
+
+function getLastUpdated() {
+  const raw = localStorage.getItem(UPDATED_KEY);
+  const n = raw ? Number(raw) : 0;
+  return Number.isFinite(n) ? n : 0;
 }
 
 // --- API helper (always sends user id) ---
@@ -120,12 +132,59 @@ function updateFilterCounts() {
   });
 }
 
+// --- Last updated UI (injected under progress bar) ---
+function ensureLastUpdatedEl() {
+  // Place it near progress bar if possible, otherwise at top of app
+  const app = document.querySelector(".app");
+  if (!app) return null;
+
+  let el = document.getElementById("lastUpdated");
+  if (el) return el;
+
+  el = document.createElement("p");
+  el.id = "lastUpdated";
+  el.className = "last-updated";
+
+  // try to insert after progress bar
+  const progressBar = document.getElementById("progressBar");
+  if (progressBar && progressBar.parentElement) {
+    progressBar.insertAdjacentElement("afterend", el);
+  } else {
+    app.insertBefore(el, app.children[2] || null);
+  }
+
+  return el;
+}
+
+function formatTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  // compact but readable
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function renderLastUpdated() {
+  const el = ensureLastUpdatedEl();
+  if (!el) return;
+  const ts = getLastUpdated();
+  el.textContent = `Last updated: ${formatTime(ts)}`;
+}
+
+// --- Soft animations ---
+function animateIn(li, i) {
+  li.classList.add("task-anim");
+  li.style.animationDelay = `${Math.min(i * 45, 240)}ms`; // stagger, cap delay
+}
+
 // --- Render ---
 function render() {
   const tasks = applyFilters(allTasks);
   list.innerHTML = "";
 
-  // Empty state
   if (tasks.length === 0) {
     const message = focusMode
       ? "No tasks in progress. Start one ▶ to use Focus Mode."
@@ -140,7 +199,7 @@ function render() {
     return;
   }
 
-  tasks.forEach(task => {
+  tasks.forEach((task, i) => {
     const li = document.createElement("li");
     li.className = `task ${task.status}`;
 
@@ -173,6 +232,7 @@ function render() {
       });
     });
 
+    animateIn(li, i);
     list.appendChild(li);
   });
 }
@@ -182,14 +242,17 @@ async function fetchTasks() {
   const res = await apiFetch("", { method: "GET" });
   const data = await res.json();
 
-  allTasks = (Array.isArray(data) ? data : []).map(t => ({
+  if (!Array.isArray(data)) return;
+
+  allTasks = data.map(t => ({
     ...t,
     status: normalizeStatus(t.status),
     note: t.note || ""
   }));
 
-  // keep local cache in sync
+  // sync local cache
   saveLocalTasks(allTasks);
+  setLastUpdated(Date.now());
 
   render();
   updateFilterCounts();
@@ -201,6 +264,9 @@ async function createTask(title, note) {
     method: "POST",
     body: JSON.stringify({ title, note })
   });
+
+  // Mark update immediately (UX feels snappy)
+  setLastUpdated(Date.now());
   await fetchTasks();
 }
 
@@ -209,11 +275,29 @@ async function updateTask(id, patch) {
     method: "PUT",
     body: JSON.stringify(patch)
   });
+
+  setLastUpdated(Date.now());
+
+  // Re-fetch tasks, then pulse the updated one
   await fetchTasks();
+
+  // Pulse the badge of the updated task
+  const updatedTaskEl = document.querySelector(`.task button[data-action="${patch.status}"]`)
+    ?.closest(".task")
+    ?.querySelector(".badge");
+
+  if (updatedTaskEl) {
+    updatedTaskEl.classList.remove("pulse"); // reset if exists
+    void updatedTaskEl.offsetWidth;           // force reflow
+    updatedTaskEl.classList.add("pulse");
+  }
 }
+
 
 async function deleteTask(id) {
   await apiFetch(`/${id}`, { method: "DELETE" });
+
+  setLastUpdated(Date.now());
   await fetchTasks();
 }
 
@@ -247,18 +331,21 @@ focusToggle.addEventListener("click", () => {
   render();
 });
 
-// --- Boot: show cached tasks instantly, then sync from API ---
-allTasks = loadLocalTasks().map(t => ({
-  ...t,
-  status: normalizeStatus(t.status),
-  note: t.note || ""
-}));
+// --- Boot: wait for DOM, show cached tasks immediately, then sync ---
+document.addEventListener("DOMContentLoaded", () => {
+  allTasks = loadLocalTasks().map(t => ({
+    ...t,
+    status: normalizeStatus(t.status),
+    note: t.note || ""
+  }));
 
-render();
-updateFilterCounts();
-updateProgressSummary();
+  render();
+  updateFilterCounts();
+  updateProgressSummary();
+  renderLastUpdated();
 
-fetchTasks().catch(() => {
-  // keep local tasks if API fails
+  fetchTasks().catch(() => {
+    // keep local tasks if API fails
+  });
 });
 
