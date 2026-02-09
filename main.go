@@ -13,12 +13,14 @@ import (
 )
 
 type Task struct {
-	ID        int    `json:"id"`
-	Title     string `json:"title"`
-	Status    string `json:"status"` // todo | progress | done
-	Note      string `json:"note"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	Status      string `json:"status"` // todo | progress | done
+	Note        string `json:"note"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedAt   int64  `json:"updatedAt"`
+	TimeSpentMs int64  `json:"timeSpentMs"`
+	StartedAt   int64  `json:"startedAt"` // unix seconds, 0 = not running
 }
 
 // Only data is saved (no mutex inside)
@@ -46,39 +48,36 @@ func main() {
 	loadStore()
 
 	// ✅ Serve static files from public directory
-	// Get working directory for Railway compatibility
 	publicDir := "./public"
 	if _, err := os.Stat(publicDir); os.IsNotExist(err) {
-		publicDir = "Public" // Railway has capital P
+		publicDir = "Public" // Railway sometimes uses capital P
 	}
 	if _, err := os.Stat(publicDir); os.IsNotExist(err) {
 		log.Printf("WARNING: Public directory not found at %s", publicDir)
 	}
+
 	fileServer := http.FileServer(http.Dir(publicDir))
-	
-	// Create a new ServeMux
+
 	mux := http.NewServeMux()
-	
-	// ✅ Health check endpoint
+
+	// ✅ Health check
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
-	
-	// ✅ Debug endpoint to check files
+
+	// ✅ Debug endpoint to check files (optional)
 	mux.HandleFunc("/debug/files", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		wd, _ := os.Getwd()
 		w.Write([]byte("Working directory: " + wd + "\n\n"))
-		
-		// List files in current directory
+
 		entries, _ := os.ReadDir(".")
 		w.Write([]byte("Files in current directory:\n"))
 		for _, e := range entries {
 			w.Write([]byte("  " + e.Name() + "\n"))
 		}
-		
-		// Check if public exists
+
 		w.Write([]byte("\nChecking for public directories:\n"))
 		if _, err := os.Stat("public"); err == nil {
 			w.Write([]byte("  ./public exists\n"))
@@ -89,7 +88,7 @@ func main() {
 		} else {
 			w.Write([]byte("  ./public NOT FOUND\n"))
 		}
-		
+
 		if _, err := os.Stat("Public"); err == nil {
 			w.Write([]byte("  ./Public exists\n"))
 			files, _ := os.ReadDir("Public")
@@ -100,12 +99,12 @@ func main() {
 			w.Write([]byte("  ./Public NOT FOUND\n"))
 		}
 	})
-	
-	// ✅ API routes (more specific routes first)
-	mux.HandleFunc("/api/tasks/", taskHandler)   // PUT, DELETE
-	mux.HandleFunc("/api/tasks", tasksHandler)   // GET, POST
-	
-	// ✅ Static files (catch-all, must be last)
+
+	// ✅ API routes
+	mux.HandleFunc("/api/tasks/", taskHandler) // PUT, DELETE
+	mux.HandleFunc("/api/tasks", tasksHandler) // GET, POST
+
+	// ✅ Static files last (catch-all)
 	mux.Handle("/", fileServer)
 
 	port := os.Getenv("PORT")
@@ -116,7 +115,7 @@ func main() {
 	addr := "0.0.0.0:" + port
 	log.Printf("Server starting on %s", addr)
 	log.Printf("Public directory: %s", publicDir)
-	
+
 	if err := http.ListenAndServe(addr, withCORS(mux)); err != nil {
 		log.Fatal("Server error:", err)
 	}
@@ -157,7 +156,7 @@ func normalizeStatus(s string) string {
 
 // -------- handlers --------
 
-// /api/tasks  (GET, POST)
+// /api/tasks (GET, POST)
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -192,19 +191,20 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 		id := store.data.NextID[uid]
 
 		task := Task{
-			ID:        id,
-			Title:     strings.TrimSpace(body.Title),
-			Note:      strings.TrimSpace(body.Note),
-			Status:    "todo",
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:          id,
+			Title:       strings.TrimSpace(body.Title),
+			Note:        strings.TrimSpace(body.Note),
+			Status:      "todo",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			TimeSpentMs: 0,
+			StartedAt:   0,
 		}
 
 		store.data.Users[uid] = append(store.data.Users[uid], task)
 		store.mu.Unlock()
 
 		saveStore()
-
 		json.NewEncoder(w).Encode(task)
 
 	default:
@@ -212,7 +212,7 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// /api/tasks/{id}  (PUT, DELETE)
+// /api/tasks/{id} (PUT, DELETE)
 func taskHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -248,10 +248,13 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "PUT":
 		var patch struct {
-			Status string `json:"status"`
-			Title  string `json:"title"`
-			Note   string `json:"note"`
+			Status      string `json:"status"`
+			Title       string `json:"title"`
+			Note        string `json:"note"`
+			TimeSpentMs *int64 `json:"timeSpentMs"`
+			StartedAt   *int64 `json:"startedAt"`
 		}
+
 		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			store.mu.Unlock()
 			http.Error(w, "invalid json body", http.StatusBadRequest)
@@ -263,23 +266,37 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 			tasks[idx].Title = strings.TrimSpace(patch.Title)
 		}
 
-		// allow empty note to clear
+		// allow empty note to clear, but only if note field is present in body
+		// (simple approach: always set it; frontend always sends note anyway)
 		tasks[idx].Note = strings.TrimSpace(patch.Note)
 
 		if patch.Status != "" {
 			tasks[idx].Status = normalizeStatus(patch.Status)
 		}
 
+		// ✅ Timer fields (persisted)
+		if patch.TimeSpentMs != nil {
+			if *patch.TimeSpentMs < 0 {
+				*patch.TimeSpentMs = 0
+			}
+			tasks[idx].TimeSpentMs = *patch.TimeSpentMs
+		}
+		if patch.StartedAt != nil {
+			if *patch.StartedAt < 0 {
+				*patch.StartedAt = 0
+			}
+			tasks[idx].StartedAt = *patch.StartedAt
+		}
+
 		tasks[idx].UpdatedAt = time.Now().Unix()
+
 		store.data.Users[uid] = tasks
 		store.mu.Unlock()
 
 		saveStore()
-
 		json.NewEncoder(w).Encode(tasks[idx])
 
 	case "DELETE":
-		// remove
 		store.data.Users[uid] = append(tasks[:idx], tasks[idx+1:]...)
 		store.mu.Unlock()
 
