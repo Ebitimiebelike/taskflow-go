@@ -1,15 +1,6 @@
 {
   "users": {
-    "u_19fb1e037f2f5_19c1b54f5b9": [
-      {
-        "id": 1,
-        "title": "Portfolio",
-        "status": "progress",
-        "note": "",
-        "createdAt": 1769986887,
-        "updatedAt": 1769986892
-      }
-    ]
+    "u_19fb1e037f2f5_19c1b54f5b9": []
   },
   "nextId": {
     "u_19fb1e037f2f5_19c1b54f5b9": 1
