@@ -102,8 +102,8 @@ func main() {
 	})
 	
 	// ✅ API routes (more specific routes first)
-	mux.HandleFunc("/api/tasks/", taskHandler)   // PUT, DELETE
-	mux.HandleFunc("/api/tasks", tasksHandler)   // GET, POST
+	mux.HandleFunc("/api/tasks", tasksHandler)     // Exact match for GET and POST
+	mux.HandleFunc("/api/tasks/", taskHandler)   // GET, POST
 	
 	// ✅ Static files (catch-all, must be last)
 	mux.Handle("/", fileServer)
@@ -159,57 +159,58 @@ func normalizeStatus(s string) string {
 
 // /api/tasks  (GET, POST)
 func tasksHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+    w.Header().Set("Content-Type", "application/json")
 
-	uid, err := getUserID(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+    uid, err := getUserID(r)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
 
-	switch r.Method {
-	case "GET":
-		store.mu.Lock()
-		tasks := store.data.Users[uid]
-		store.mu.Unlock()
+    switch r.Method {
+    case "GET":
+        store.mu.Lock()
+        tasks := store.data.Users[uid]
+        store.mu.Unlock()
 
-		json.NewEncoder(w).Encode(tasks)
+        json.NewEncoder(w).Encode(tasks)
 
-	case "POST":
-		var body struct {
-			Title string `json:"title"`
-			Note  string `json:"note"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Title) == "" {
-			http.Error(w, "invalid task data", http.StatusBadRequest)
-			return
-		}
+    case "POST":
+        var body struct {
+            Title string `json:"title"`
+            Note  string `json:"note"`
+        }
+        if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Title) == "" {
+            http.Error(w, "invalid task data", http.StatusBadRequest)
+            return
+        }
 
-		now := time.Now().Unix()
+        now := time.Now().Unix()
 
-		store.mu.Lock()
-		store.data.NextID[uid]++
-		id := store.data.NextID[uid]
+        store.mu.Lock()
+        store.data.NextID[uid]++
+        id := store.data.NextID[uid]
 
-		task := Task{
-			ID:        id,
-			Title:     strings.TrimSpace(body.Title),
-			Note:      strings.TrimSpace(body.Note),
-			Status:    "todo",
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
+        task := Task{
+            ID:        id,
+            Title:     strings.TrimSpace(body.Title),
+            Note:      strings.TrimSpace(body.Note),
+            Status:    "todo",
+            CreatedAt: now,
+            UpdatedAt: now,
+        }
 
-		store.data.Users[uid] = append(store.data.Users[uid], task)
-		store.mu.Unlock()
+        store.data.Users[uid] = append(store.data.Users[uid], task)
+        store.mu.Unlock()
 
-		saveStore()
+        saveStore()
 
-		json.NewEncoder(w).Encode(task)
+        json.NewEncoder(w).Encode(task)
 
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
+    default:
+        // Combined the two into a single, clean default handler
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    }
 }
 
 // /api/tasks/{id}  (PUT, DELETE)
